@@ -1,24 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="hr">
 <head>
     <meta charset="utf-8">
-    <title>SiC Defect Detector</title>
+    <title>DLTS Defect ID</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f4f4f4; margin: 0; padding: 20px; }
-        #wrapper { position: relative; display: inline-block; border: 4px solid #333; border-radius: 10px; overflow: hidden; background: #000; }
-        video { display: block; width: 100%; max-width: 500px; height: auto; }
+        body { font-family: sans-serif; text-align: center; background: #f0f0f0; padding: 10px; margin: 0; }
+        #container { position: relative; display: inline-block; width: 100%; max-width: 500px; border: 5px solid #333; border-radius: 15px; overflow: hidden; background: #000; line-height: 0; }
+        video { width: 100%; height: auto; display: block; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #status { margin: 15px; font-weight: bold; color: #555; }
-        button { padding: 15px 30px; font-size: 1.1em; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .ui-box { margin: 15px 0; }
+        button { padding: 15px 30px; font-size: 1.2rem; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px #0056b3; }
+        button:active { transform: translateY(4px); box-shadow: 0 0; }
+        #status { font-weight: bold; color: #444; margin-bottom: 10px; }
     </style>
 </head>
 <body>
     <h2>DLTS Defect ID (Object Detection)</h2>
-    <button id="start-btn">POKRENI KAMERU</button>
-    <div id="status">Kliknite na gumb za početak</div>
+    
+    <div class="ui-box">
+        <button id="start-btn">POKRENI KAMERU</button>
+    </div>
+    
+    <div id="status">Sustav spreman.</div>
 
-    <div id="wrapper">
+    <div id="container">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
     </div>
@@ -26,48 +32,43 @@
     <script src="edge-impulse-standalone.js"></script>
 
     <script>
-        // --- 1. TVOJA KLASA (izvađena iz run-impulse.js) ---
-        class EdgeImpulseClassifier {
+        // --- 1. RUČNA DEFINICIJA KLASIFIKATORA ---
+        class MyClassifier {
             init() {
-                let ret = Module.init();
+                if (typeof Module === 'undefined') return Promise.reject("Model nije učitan!");
+                Module.init();
                 return Promise.resolve();
             }
-            classify(rawData) {
-                let typedArray = new Float32Array(rawData);
-                let numBytes = typedArray.length * typedArray.BYTES_PER_ELEMENT;
-                let ptr = Module._malloc(numBytes);
-                let heapBytes = new Uint8Array(Module.HEAPU8.buffer, ptr, numBytes);
-                heapBytes.set(new Uint8Array(typedArray.buffer));
-                
-                let ret = Module.run_classifier(ptr, rawData.length, false);
+            analyze(features) {
+                let typedArray = new Float32Array(features);
+                let ptr = Module._malloc(typedArray.length * 4);
+                Module.HEAPF32.set(typedArray, ptr >> 2);
+                let ret = Module.run_classifier(ptr, features.length, false);
                 Module._free(ptr);
                 
-                let results = [];
+                let found = [];
                 for (let i = 0; i < ret.size(); i++) {
                     let c = ret.get(i);
-                    results.push({ 
-                        label: c.label, value: c.value, 
-                        x: c.x, y: c.y, width: c.width, height: c.height 
-                    });
+                    found.push({ label: c.label, val: c.value, x: c.x, y: c.y, w: c.width, h: c.height });
                     c.delete();
                 }
                 ret.delete();
-                return results;
+                return found;
             }
         }
 
-        const btn = document.getElementById('start-btn');
         const video = document.getElementById('video');
         const overlay = document.getElementById('overlay');
         const ctx = overlay.getContext('2d');
         const status = document.getElementById('status');
+        const btn = document.getElementById('start-btn');
 
         btn.onclick = async () => {
-            btn.style.display = 'none';
             status.innerText = "Otvaram kameru...";
+            btn.disabled = true;
 
             try {
-                // 1. Pokreni kameru
+                // KLJUČNO: Prvo tražimo kameru!
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment" } 
                 });
@@ -76,54 +77,60 @@
                 video.onloadedmetadata = () => {
                     overlay.width = video.videoWidth;
                     overlay.height = video.videoHeight;
-                    
-                    // 2. Pokreni model
-                    status.innerText = "Učitavam model...";
-                    const classifier = new EdgeImpulseClassifier();
-                    classifier.init().then(() => {
-                        status.innerText = "DETEKCIJA AKTIVNA";
-                        
-                        // 3. Petlja za analizu
-                        const tempCanvas = document.createElement('canvas');
-                        tempCanvas.width = 96; tempCanvas.height = 96;
-                        const tempCtx = tempCanvas.getContext('2d');
-
-                        setInterval(() => {
-                            tempCtx.drawImage(video, 0, 0, 96, 96);
-                            const imgData = tempCtx.getImageData(0, 0, 96, 96).data;
-                            let features = [];
-                            for (let i = 0; i < imgData.length; i += 4) {
-                                features.push((imgData[i] << 16) | (imgData[i+1] << 8) | imgData[i+2]);
-                            }
-
-                            const results = classifier.classify(features);
-
-                            // 4. Crtanje boxova
-                            ctx.clearRect(0, 0, overlay.width, overlay.height);
-                            results.forEach(res => {
-                                if (res.value > 0.5) { // Prag 50%
-                                    const scaleX = overlay.width / 96;
-                                    const scaleY = overlay.height / 96;
-                                    const x = res.x * scaleX;
-                                    const y = res.y * scaleY;
-                                    const w = res.width * scaleX;
-                                    const h = res.height * scaleY;
-
-                                    ctx.strokeStyle = "#00FF00";
-                                    ctx.lineWidth = 3;
-                                    ctx.strokeRect(x, y, w, h);
-                                    ctx.fillStyle = "#00FF00";
-                                    ctx.font = "bold 18px Arial";
-                                    ctx.fillText(`${res.label} ${(res.value * 100).toFixed(0)}%`, x, y - 5);
-                                }
-                            });
-                        }, 250);
-                    });
+                    startAI();
                 };
             } catch (err) {
                 status.innerText = "Greška: " + err.message;
+                btn.disabled = false;
             }
         };
+
+        async function startAI() {
+            status.innerText = "Učitavam model (pričekaj)...";
+            const ai = new MyClassifier();
+            
+            try {
+                // Čekamo da WebAssembly postane dostupan
+                if (typeof Module === 'undefined' || !Module.init) {
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+                
+                await ai.init();
+                status.innerText = "DETEKCIJA AKTIVNA!";
+                btn.style.display = 'none';
+
+                const tempC = document.createElement('canvas');
+                tempC.width = 96; tempC.height = 96;
+                const tempCtx = tempC.getContext('2d');
+
+                setInterval(() => {
+                    tempCtx.drawImage(video, 0, 0, 96, 96);
+                    const pixels = tempCtx.getImageData(0, 0, 96, 96).data;
+                    let feats = [];
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        feats.push((pixels[i] << 16) | (pixels[i+1] << 8) | pixels[i+2]);
+                    }
+
+                    const results = ai.analyze(feats);
+                    
+                    ctx.clearRect(0, 0, overlay.width, overlay.height);
+                    results.forEach(r => {
+                        if (r.val > 0.5) {
+                            const sx = overlay.width / 96;
+                            const sy = overlay.height / 96;
+                            ctx.strokeStyle = "#00FF00";
+                            ctx.lineWidth = 4;
+                            ctx.strokeRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
+                            ctx.fillStyle = "#00FF00";
+                            ctx.font = "bold 20px Arial";
+                            ctx.fillText(`${r.label} ${(r.val*100).toFixed(0)}%`, r.x * sx, (r.y * sy) - 10);
+                        }
+                    });
+                }, 200);
+            } catch (e) {
+                status.innerText = "Model nije spreman. Osvježi stranicu.";
+            }
+        }
     </script>
 </body>
-</html>  
+</html>
