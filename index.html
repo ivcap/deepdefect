@@ -2,105 +2,132 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>DLTS Detector</title>
+    <title>SiC Defect Detector - Object Detection</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
-        video { width: 100%; max-width: 400px; border: 3px solid #333; border-radius: 10px; background: #000; }
-        #status { margin: 10px; color: #666; font-weight: bold; }
-        #out { font-size: 1.5em; color: #007bff; margin-top: 15px; }
-        button { padding: 15px 30px; font-size: 1.2em; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        body { font-family: sans-serif; text-align: center; background: #f4f4f4; margin: 0; padding: 20px; }
+        #video-wrap { position: relative; display: inline-block; border: 4px solid #333; border-radius: 10px; overflow: hidden; background: #000; }
+        video { display: block; width: 100%; max-width: 600px; height: auto; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #status { margin: 15px; font-weight: bold; color: #444; }
+        button { padding: 15px 30px; font-size: 1.1em; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
     </style>
 </head>
 <body>
-    <h2>DLTS Defect ID</h2>
-    
-    <button id="btn">POKRENI KAMERU</button>
+    <h1>DLTS Defect ID</h1>
+    <button id="btn-start">POKRENI KAMERU</button>
     <div id="status">Sustav spreman.</div>
-    
-    <video id="vid" autoplay playsinline muted></video>
-    <div id="out"></div>
+
+    <div id="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+    </div>
 
     <script src="edge-impulse-standalone.js"></script>
 
     <script>
-        const btn = document.getElementById('btn');
-        const vid = document.getElementById('vid');
+        // --- LOGIKA ZA POVEZIVANJE KAMERE I MODELA ---
+        const btn = document.getElementById('btn-start');
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
         const status = document.getElementById('status');
-        const out = document.getElementById('out');
+        const ctx = overlay.getContext('2d');
 
         btn.onclick = async () => {
-            status.innerText = "Inicijalizacija...";
             btn.style.display = 'none';
+            status.innerText = "Inicijalizacija...";
 
             try {
-                // 1. PALIMO KAMERU (kao što je radilo prije)
+                // 1. Pokretanje kamere
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment" } 
                 });
-                vid.srcObject = stream;
-                status.innerText = "Kamera aktivna. Učitavam model...";
+                video.srcObject = stream;
 
-                // 2. ČEKAMO MODEL (pomoću Module objekta iz standalone.js)
-                if (typeof Module === 'undefined') throw new Error("Standalone.js nije učitan!");
-                
-                // Čekamo da se WebAssembly inicijalizira
-                Module.onRuntimeInitialized = () => {
-                    Module.init();
-                    status.innerText = "MODEL SPREMAN! Analiziram...";
-                    pokreniAnalizu();
+                video.onloadedmetadata = () => {
+                    overlay.width = video.videoWidth;
+                    overlay.height = video.videoHeight;
+                    inicijalizirajModel();
                 };
-
-                // Ako je već inicijaliziran
-                if (classifierInitialized) {
-                    Module.init();
-                    status.innerText = "Sustav aktivan.";
-                    pokreniAnalizu();
-                }
-
             } catch (err) {
-                status.innerText = "Greška: " + err.message;
-                btn.style.display = 'block';
+                status.innerText = "Greška kamere: " + err.message;
             }
         };
 
-        let classifierInitialized = false;
-        Module.onRuntimeInitialized = () => { classifierInitialized = true; };
+        async function inicijalizirajModel() {
+            status.innerText = "Učitavam model...";
+            
+            // Čekamo da se WebAssembly Module učita
+            if (typeof Module === 'undefined') {
+                status.innerText = "Greška: standalone.js nije učitan.";
+                return;
+            }
 
-        function pokreniAnalizu() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 96; 
-            canvas.height = 96;
-            const ctx = canvas.getContext('2d');
+            Module.onRuntimeInitialized = () => {
+                Module.init();
+                status.innerText = "DETEKCIJA AKTIVNA";
+                petljaAnalize();
+            };
+
+            // Za svaki slučaj ako je već učitan
+            if (Module.calledRun) {
+                Module.init();
+                status.innerText = "DETEKCIJA AKTIVNA";
+                petljaAnalize();
+            }
+        }
+
+        function petljaAnalize() {
+            // Skriveni canvas za model (96x96 piksela)
+            const offscreen = document.createElement('canvas');
+            offscreen.width = 96; offscreen.height = 96;
+            const oCtx = offscreen.getContext('2d');
 
             setInterval(() => {
-                ctx.drawImage(vid, 0, 0, 96, 96);
-                const data = ctx.getImageData(0, 0, 96, 96).data;
+                // 1. Pripremi sliku (frame)
+                oCtx.drawImage(video, 0, 0, 96, 96);
+                const imgData = oCtx.getImageData(0, 0, 96, 96).data;
                 let features = [];
-                for (let i = 0; i < data.length; i += 4) {
-                    features.push((data[i] << 16) | (data[i+1] << 8) | data[i+2]);
+                for (let i = 0; i < imgData.length; i += 4) {
+                    features.push((imgData[i] << 16) | (imgData[i+1] << 8) | imgData[i+2]);
                 }
 
-                // Direktno pozivamo Module funkcije (bez klase)
+                // 2. Pokreni inferenciju
                 let typedArray = new Float32Array(features);
                 let ptr = Module._malloc(typedArray.length * 4);
                 Module.HEAPF32.set(typedArray, ptr >> 2);
-                
                 let ret = Module.run_classifier(ptr, features.length, false);
                 Module._free(ptr);
 
-                if (ret.result === 0) {
-                    let ispis = "";
-                    for (let i = 0; i < ret.size(); i++) {
-                        let c = ret.get(i);
-                        ispis += `<div>${c.label}: ${(c.value * 100).toFixed(1)}%</div>`;
-                        c.delete();
+                // 3. CRTANJE OKVIRA (Object Detection)
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+                
+                for (let i = 0; i < ret.size(); i++) {
+                    let res = ret.get(i);
+                    if (res.value > 0.5) { // Crtaj samo ako je vjerojatnost > 50%
+                        const scaleX = overlay.width / 96;
+                        const scaleY = overlay.height / 96;
+                        
+                        const x = res.x * scaleX;
+                        const y = res.y * scaleY;
+                        const w = res.width * scaleX;
+                        const h = res.height * scaleY;
+
+                        // Zeleni okvir
+                        ctx.strokeStyle = "#00FF00";
+                        ctx.lineWidth = 3;
+                        ctx.strokeRect(x, y, w, h);
+
+                        // Ime defekta i postotak
+                        ctx.fillStyle = "#00FF00";
+                        ctx.font = "bold 18px Arial";
+                        ctx.fillText(`${res.label} ${(res.value * 100).toFixed(0)}%`, x, y - 5);
                     }
-                    out.innerHTML = ispis;
+                    res.delete();
                 }
                 ret.delete();
-            }, 500);
+            }, 200);
         }
     </script>
 </body>
-</html>            
+</html>
