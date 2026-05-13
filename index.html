@@ -8,25 +8,98 @@
         body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
         #video-container { position: relative; display: inline-block; border: 4px solid #333; border-radius: 10px; overflow: hidden; background: #000; }
         video { display: block; width: 100%; max-width: 400px; height: auto; }
-        #predictions { margin-top: 20px; font-weight: bold; font-size: 1.2em; color: #007bff; }
-        #status { color: #666; margin-bottom: 10px; }
-        button { padding: 15px 30px; font-size: 1.1em; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 10px; }
+        #predictions { margin-top: 20px; font-weight: bold; font-size: 1.2em; color: #007bff; min-height: 50px; }
+        button { padding: 15px 30px; font-size: 1.1em; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
     </style>
 </head>
 <body>
     <h2>DLTS Defect ID (Si)</h2>
-    
-    <button id="start-btn">POKRENI DETEKCIJU</button>
-    
-    <div id="status">Kliknite na gumb iznad</div>
-
+    <button id="start-btn">POKRENI KAMERU</button>
+    <br><br>
     <div id="video-container">
         <video id="video" autoplay playsinline muted></video>
     </div>
-
     <div id="predictions"></div>
 
     <script src="edge-impulse-standalone.js"></script>
-    <script src="app.js"></script>
+
+    <script>
+        // Ovdje je tvoja klasa koju smo stavili unutar HTML-a radi sigurnosti
+        class EdgeImpulseClassifier {
+            init() {
+                let ret = Module.init();
+                return Promise.resolve();
+            }
+            getProperties() {
+                let props = Module.get_properties();
+                return { 
+                    width: props.input_width || 96, 
+                    height: props.input_height || 96 
+                };
+            }
+            classify(rawData) {
+                let typedArray = new Float32Array(rawData);
+                let numBytes = typedArray.length * typedArray.BYTES_PER_ELEMENT;
+                let ptr = Module._malloc(numBytes);
+                let heapBytes = new Uint8Array(Module.HEAPU8.buffer, ptr, numBytes);
+                heapBytes.set(new Uint8Array(typedArray.buffer));
+                
+                let ret = Module.run_classifier(ptr, rawData.length, false);
+                Module._free(ptr);
+                
+                let results = [];
+                for (let i = 0; i < ret.size(); i++) {
+                    let c = ret.get(i);
+                    results.push({ label: c.label, value: c.value });
+                    c.delete();
+                }
+                ret.delete();
+                return results;
+            }
+        }
+
+        const btn = document.getElementById('start-btn');
+        const video = document.getElementById('video');
+        const predictions = document.getElementById('predictions');
+
+        btn.onclick = async () => {
+            btn.style.display = 'none';
+            try {
+                // 1. Pokreni kameru
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" } 
+                });
+                video.srcObject = stream;
+
+                // 2. Inicijaliziraj model (Klasa koristi 'Module' koji je učitan iz standalone.js)
+                const classifier = new EdgeImpulseClassifier();
+                await classifier.init();
+
+                // 3. Pokreni analizu
+                const props = classifier.getProperties();
+                const canvas = document.createElement('canvas');
+                canvas.width = props.width;
+                canvas.height = props.height;
+                const ctx = canvas.getContext('2d');
+
+                setInterval(() => {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    let features = [];
+                    for (let i = 0; i < imgData.data.length; i += 4) {
+                        features.push((imgData.data[i] << 16) | (imgData.data[i+1] << 8) | imgData.data[i+2]);
+                    }
+
+                    const results = classifier.classify(features);
+                    predictions.innerHTML = results
+                        .map(r => `<div>${r.label}: ${(r.value * 100).toFixed(1)}%</div>`)
+                        .join('');
+                }, 500);
+
+            } catch (err) {
+                alert("Greška: " + err.message);
+            }
+        };
+    </script>
 </body>
 </html>
