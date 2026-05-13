@@ -2,27 +2,29 @@
 <html lang="hr">
 <head>
     <meta charset="utf-8">
-    <title>DLTS Defect ID</title>
+    <title>DLTS Defect ID - Pause Mode</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f0f0; padding: 10px; margin: 0; }
         #container { position: relative; display: inline-block; width: 100%; max-width: 500px; border: 5px solid #333; border-radius: 15px; overflow: hidden; background: #000; line-height: 0; }
         video { width: 100%; height: auto; display: block; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        .ui-box { margin: 15px 0; }
-        button { padding: 15px 30px; font-size: 1.2rem; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px #0056b3; }
-        button:active { transform: translateY(4px); box-shadow: 0 0; }
-        #status { font-weight: bold; color: #444; margin-bottom: 10px; }
+        .ui-box { margin: 15px 0; display: flex; justify-content: center; gap: 10px; }
+        button { padding: 12px 20px; font-size: 1rem; border: none; border-radius: 8px; cursor: pointer; color: white; font-weight: bold; }
+        #start-btn { background: #007bff; }
+        #pause-btn { background: #dc3545; display: none; } /* Skriven dok se ne pokrene kamera */
+        #status { font-weight: bold; color: #444; margin-bottom: 10px; min-height: 1.2em; }
     </style>
 </head>
 <body>
-    <h2>DLTS Defect ID (Object Detection)</h2>
-    
-    <div class="ui-box">
-        <button id="start-btn">POKRENI KAMERU</button>
-    </div>
+    <h2>DLTS Defect ID</h2>
     
     <div id="status">Sustav spreman.</div>
+
+    <div class="ui-box">
+        <button id="start-btn">POKRENI KAMERU</button>
+        <button id="pause-btn">PAUZA</button>
+    </div>
 
     <div id="container">
         <video id="video" autoplay playsinline muted></video>
@@ -32,7 +34,6 @@
     <script src="edge-impulse-standalone.js"></script>
 
     <script>
-        // --- 1. RUČNA DEFINICIJA KLASIFIKATORA ---
         class MyClassifier {
             init() {
                 if (typeof Module === 'undefined') return Promise.reject("Model nije učitan!");
@@ -61,14 +62,17 @@
         const overlay = document.getElementById('overlay');
         const ctx = overlay.getContext('2d');
         const status = document.getElementById('status');
-        const btn = document.getElementById('start-btn');
+        const startBtn = document.getElementById('start-btn');
+        const pauseBtn = document.getElementById('pause-btn');
 
-        btn.onclick = async () => {
+        let isPaused = false;
+        let aiInterval = null;
+
+        startBtn.onclick = async () => {
             status.innerText = "Otvaram kameru...";
-            btn.disabled = true;
+            startBtn.style.display = 'none';
 
             try {
-                // KLJUČNO: Prvo tražimo kameru!
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment" } 
                 });
@@ -77,33 +81,52 @@
                 video.onloadedmetadata = () => {
                     overlay.width = video.videoWidth;
                     overlay.height = video.videoHeight;
+                    pauseBtn.style.display = 'block'; // Prikaži gumb za pauzu
                     startAI();
                 };
             } catch (err) {
                 status.innerText = "Greška: " + err.message;
-                btn.disabled = false;
+                startBtn.style.display = 'inline-block';
+            }
+        };
+
+        // Logika za Pauzu
+        pauseBtn.onclick = () => {
+            if (!isPaused) {
+                isPaused = true;
+                video.pause(); // Zaustavi video frame
+                pauseBtn.innerText = "NASTAVI";
+                pauseBtn.style.background = "#28a745"; // Promijeni u zeleno
+                status.innerText = "ZALEĐENO (Analiza pauzirana)";
+            } else {
+                isPaused = false;
+                video.play(); // Pokreni video ponovo
+                pauseBtn.innerText = "PAUZA";
+                pauseBtn.style.background = "#dc3545"; // Vrati u crveno
+                status.innerText = "DETEKCIJA AKTIVNA!";
             }
         };
 
         async function startAI() {
-            status.innerText = "Učitavam model (pričekaj)...";
+            status.innerText = "Učitavam model...";
             const ai = new MyClassifier();
             
             try {
-                // Čekamo da WebAssembly postane dostupan
                 if (typeof Module === 'undefined' || !Module.init) {
                     await new Promise(r => setTimeout(r, 2000));
                 }
                 
                 await ai.init();
                 status.innerText = "DETEKCIJA AKTIVNA!";
-                btn.style.display = 'none';
 
                 const tempC = document.createElement('canvas');
                 tempC.width = 96; tempC.height = 96;
                 const tempCtx = tempC.getContext('2d');
 
-                setInterval(() => {
+                aiInterval = setInterval(() => {
+                    // Ako je pauzirano, ne radi ništa (ostavlja zadnji frame na ekranu)
+                    if (isPaused) return;
+
                     tempCtx.drawImage(video, 0, 0, 96, 96);
                     const pixels = tempCtx.getImageData(0, 0, 96, 96).data;
                     let feats = [];
