@@ -1,62 +1,28 @@
 <!DOCTYPE html>
-<html lang="hr">
+<html>
 <head>
     <meta charset="utf-8">
     <title>DLTS Defect Detector</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 20px; }
-        #video-container { position: relative; display: inline-block; border: 3px solid #333; border-radius: 10px; background: #000; overflow: hidden; min-width: 320px; min-height: 240px; }
+        #video-container { position: relative; display: inline-block; border: 4px solid #333; border-radius: 10px; overflow: hidden; background: #000; }
         video { display: block; width: 100%; max-width: 400px; height: auto; }
-        #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #results { margin-top: 20px; font-size: 1.2rem; font-weight: bold; color: #007bff; min-height: 1.5em; }
-        .controls { margin-bottom: 20px; }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px; }
-        button:disabled { background: #ccc; }
+        #predictions { margin-top: 20px; font-weight: bold; font-size: 1.2em; color: #007bff; }
+        #status { color: #666; font-size: 0.9em; }
     </style>
 </head>
 <body>
-    <h1>DLTS Defect ID (Si)</h1>
-    
-    <div class="controls">
-        <button id="btn-start">POKRENI KAMERU I MODEL</button>
-    </div>
+    <h2>DLTS Defect ID (Si)</h2>
+    <div id="status">Učitavam model...</div>
 
     <div id="video-container">
         <video id="video" autoplay playsinline muted></video>
-        <canvas id="canvas"></canvas>
     </div>
 
-    <div id="results">Status: Klikni gumb za početak...</div>
+    <div id="predictions">Rezultati će se pojaviti ovdje...</div>
 
     <script src="edge-impulse-standalone.js"></script>
-    <script src="run-impulse.js"></script>
-
-    <script>
-        // Ručno pokretanje iz HTML-a kako bismo osigurali dozvolu
-        const btn = document.getElementById('btn-start');
-        btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            btn.innerText = "Učitavam...";
-            try {
-                // Pozivamo funkciju iz run-impulse.js
-                if (typeof window.runImpulse === 'function') {
-                    await window.runImpulse();
-                } else {
-                    // Ako funkcija nije globalna, pokušavamo inicijalizirati kameru izravno
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { facingMode: "environment" } 
-                    });
-                    document.getElementById('video').srcObject = stream;
-                    document.getElementById('results').innerText = "Kamera aktivna. Pokrećem model...";
-                }
-            } catch (err) {
-                console.error("Greška:", err);
-                document.getElementById('results').innerText = "Greška: " + err.message;
-                btn.disabled = false;
-                btn.innerText = "Pokušaj ponovno";
-            }
-        });
-    </script>
+    <script src="app.js"></script>
 </body>
 </html>
